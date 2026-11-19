@@ -1,4 +1,4 @@
-// Boundary: append-only JSONL files, one JSON object per line, validated against a field table on read.
+// Boundary: the Store interface (one read, one batched append), the record field tables, and the JSONL-file backend.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDate } from '../dates.ts';
@@ -30,30 +30,50 @@ const LOG_SHAPES: Record<string, Record<string, Check>> = {
   readiness: { at: str, date, sleepHours: num(0, 24), fatigue: int(1, 5), pain: num(0, 10), painLocation: opt(str), painTrend: opt(oneOf('stable', 'improving', 'worsening', 'sharp')) },
 };
 
-function readJsonl<T>(file: string, discriminator: 'op' | 'type', shapes: typeof OVERRIDE_SHAPES): T[] {
+interface RecOf { log: LogEntry; override: OverrideRecord }
+export type Rec = { [K in keyof RecOf]: { readonly kind: K; readonly rec: RecOf[K] } }[keyof RecOf];
+export interface StoreData { readonly log: LogEntry[]; readonly overrides: OverrideRecord[] }
+
+/** Append-only storage. `append` writes every record or none where the backend can (D1 batch). */
+export interface Store {
+  read(): Promise<StoreData>;
+  append(recs: readonly Rec[]): Promise<void>;
+}
+
+const SHAPES = { log: { tag: 'type', shapes: LOG_SHAPES }, override: { tag: 'op', shapes: OVERRIDE_SHAPES } } as const;
+
+/** Applied to every record read from any backend. `where` names the source in the error. */
+export function validate<K extends keyof RecOf>(kind: K, raw: unknown, where: string): RecOf[K] {
+  const { tag, shapes } = SHAPES[kind];
+  const rec = raw as Record<string, unknown>;
+  if (typeof raw !== 'object' || raw === null) throw new Error(`${where}: not an object`);
+  const shape = shapes[String(rec[tag])];
+  if (!shape) throw new Error(`${where}: unknown ${tag} "${String(rec[tag])}"`);
+  const bad = Object.entries(shape).find(([k, check]) => !check(rec[k]));
+  if (bad) throw new Error(`${where}: bad field "${bad[0]}"`);
+  return rec as RecOf[K];
+}
+
+export const parseJson = (text: string, where: string): unknown => {
+  try { return JSON.parse(text); } catch { throw new Error(`${where}: not valid JSON`); }
+};
+
+function readJsonl<K extends keyof RecOf>(file: string, kind: K): RecOf[K][] {
   if (!existsSync(file)) return [];
   return readFileSync(file, 'utf8').split('\n').flatMap((line, i) => {
     if (!line.trim()) return [];
     const where = `${file}:${i + 1}`;
-    let rec: Record<string, unknown>;
-    try { rec = JSON.parse(line); } catch { throw new Error(`${where}: not valid JSON`); }
-    const shape = shapes[String(rec[discriminator])];
-    if (!shape) throw new Error(`${where}: unknown ${discriminator} "${String(rec[discriminator])}"`);
-    const bad = Object.entries(shape).find(([k, check]) => !check(rec[k]));
-    if (bad) throw new Error(`${where}: bad field "${bad[0]}"`);
-    return [rec as T];
+    return [validate(kind, parseJson(line, where), where)];
   });
 }
 
-const append = (file: string, rec: object) => {
-  mkdirSync(join(file, '..'), { recursive: true });
-  appendFileSync(file, JSON.stringify(rec) + '\n');
-};
+const FILES = { log: 'log.jsonl', override: 'overrides.jsonl' } as const;
 
-export const overridesFile = (dir: string) => join(dir, 'overrides.jsonl');
-export const logFile = (dir: string) => join(dir, 'log.jsonl');
-
-export const readOverrides = (dir: string) => readJsonl<OverrideRecord>(overridesFile(dir), 'op', OVERRIDE_SHAPES);
-export const readLog = (dir: string) => readJsonl<LogEntry>(logFile(dir), 'type', LOG_SHAPES);
-export const appendOverride = (dir: string, rec: OverrideRecord) => append(overridesFile(dir), rec);
-export const appendLog = (dir: string, rec: LogEntry) => append(logFile(dir), rec);
+/** One JSON object per line in `<dir>/log.jsonl` and `<dir>/overrides.jsonl`. */
+export const fileStore = (dir: string): Store => ({
+  read: async () => ({ log: readJsonl(join(dir, FILES.log), 'log'), overrides: readJsonl(join(dir, FILES.override), 'override') }),
+  append: async (recs) => {
+    mkdirSync(dir, { recursive: true });
+    for (const { kind, rec } of recs) appendFileSync(join(dir, FILES[kind]), JSON.stringify(rec) + '\n');
+  },
+});

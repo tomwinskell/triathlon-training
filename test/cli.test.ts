@@ -55,26 +55,28 @@ test('weekStats: completion and minutes from the log; optional sessions count on
   assert.equal(s.completion, 0.2);
 });
 
-test('notify: ntfy receives the tomorrow text; weekly is skipped off-Sunday and sent with --force', async () => {
-  const got: { url?: string; title?: string; auth?: string; body: string }[] = [];
+test('notify: ntfy receives the tomorrow text and a Click link; weekly is skipped off-Sunday and sent with --force', async () => {
+  const got: { url?: string; title?: string; auth?: string; click?: string; body: string }[] = [];
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
-    req.on('end', () => { got.push({ url: req.url, title: String(req.headers.title), auth: req.headers.authorization, body }); res.end('ok'); });
+    req.on('end', () => { got.push({ url: req.url, title: String(req.headers.title), auth: req.headers.authorization, click: String(req.headers.click), body }); res.end('ok'); });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const e = env({ NOTIFY_CHANNELS: 'ntfy', NTFY_TOPIC: 'my-topic', NTFY_TOKEN: 'tk', NTFY_SERVER: `http://127.0.0.1:${(server.address() as { port: number }).port}` });
+    const e = env({ NTFY_TOPIC: 'my-topic', NTFY_TOKEN: 'tk', APP_URL: 'https://tri.example/', NTFY_SERVER: `http://127.0.0.1:${(server.address() as { port: number }).port}` });
     assert.match(await main(['notify', 'tomorrow', ...T], e), /sent to ntfy/);
     assert.equal(got.length, 1);
     assert.equal(got[0]!.url, '/my-topic');
     assert.equal(got[0]!.auth, 'Bearer tk');
+    assert.equal(got[0]!.click, 'https://tri.example/');
     assert.match(got[0]!.body, /Tomorrow Fri 2026-11-20[\s\S]*Endurance 1, 50 min[\s\S]*Strength B/);
     assert.match(await main(['notify', 'weekly', ...T], e), /Not Sunday/);
     assert.equal(got.length, 1);
     await main(['notify', 'weekly', '--force', ...T], e);
     assert.equal(got.length, 2);
-    await assert.rejects(main(['notify', 'tomorrow', ...T], { ...e, NOTIFY_CHANNELS: 'slack' }), /slack needs SLACK_BOT_TOKEN/);
+    await assert.rejects(main(['notify', 'tomorrow', ...T], env()), /NTFY_TOPIC is not set/);
+    assert.match(await main(['notify', 'tomorrow', '--dry-run', ...T], env()), /\[dry-run\] ntfy: off[\s\S]*Tomorrow Fri/);
   } finally {
     server.close();
   }

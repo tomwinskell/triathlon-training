@@ -1,59 +1,40 @@
-// Boundary: send a text to every channel in NOTIFY_CHANNELS using global fetch.
-import { UserError } from './app.ts';
+// Boundary: build the evening and weekly messages and send them to ntfy using global fetch.
+import { UserError, fail, type State } from './app.ts';
+import { tomorrowText, weeklyText } from './format.ts';
 
 export interface Message { readonly title: string; readonly text: string }
-type Env = NodeJS.ProcessEnv;
-interface Channel { readonly env: readonly string[]; readonly send: (m: Message, env: Env) => Promise<void> }
+/** The ntfy settings; Node's `process.env` and the Worker's env both fit. */
+export interface NtfyEnv {
+  readonly NTFY_TOPIC?: string;
+  readonly NTFY_SERVER?: string;
+  readonly NTFY_TOKEN?: string;
+  /** The page's address; ntfy opens it when you tap the notification. */
+  readonly APP_URL?: string;
+}
 
 const TIMEOUT_MS = 15_000;
 
-async function post(url: string, init: RequestInit): Promise<Response> {
-  const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(TIMEOUT_MS), ...init });
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
-  return res;
-}
-
-export const CHANNELS: Record<string, Channel> = {
-  ntfy: {
-    env: ['NTFY_TOPIC'],
-    send: async (m, env) => {
-      const server = (env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/$/, '');
-      await post(`${server}/${encodeURIComponent(env.NTFY_TOPIC!)}`, {
-        headers: { Title: m.title, ...(env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {}) },
-        body: m.text,
-      });
-    },
-  },
-  slack: {
-    env: ['SLACK_BOT_TOKEN', 'SLACK_USER_ID'],
-    send: async (m, env) => {
-      const res = await post('https://slack.com/api/chat.postMessage', {
-        headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`, 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ channel: env.SLACK_USER_ID, text: `*${m.title}*\n${m.text}` }),
-      });
-      const body = (await res.json()) as { ok: boolean; error?: string };
-      if (!body.ok) throw new Error(`Slack: ${body.error}`);
-    },
-  },
+const KINDS: Record<string, { title: string; text: (state: State) => string | null }> = {
+  tomorrow: { title: "Tomorrow's training", text: tomorrowText },
+  weekly: { title: 'Weekly training summary', text: weeklyText },
 };
 
-/** Configured channel names; throws on an unknown name or a missing variable. */
-export function channelsFrom(env: Env): string[] {
-  const names = (env.NOTIFY_CHANNELS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const problems = names.flatMap((n) => {
-    const ch = CHANNELS[n];
-    return !ch ? [`unknown channel "${n}" (use ${Object.keys(CHANNELS).join(', ')})`] : ch.env.filter((v) => !env[v]).map((v) => `${n} needs ${v}`);
-  });
-  if (problems.length) throw new UserError(`NOTIFY_CHANNELS: ${problems.join('; ')}`);
-  return names;
+/** The message for `kind`, or null when there is nothing to say. Throws on an unknown kind. */
+export function messageFor(kind: string, state: State): Message | null {
+  const spec = KINDS[kind] ?? fail(`notify takes ${Object.keys(KINDS).join(' or ')}, got "${kind}"`);
+  const text = spec.text(state);
+  return text === null ? null : { title: spec.title, text };
 }
 
-/** Tries every channel; throws one error listing the failures. Returns the channels that delivered. */
-export async function notify(m: Message, env: Env): Promise<string[]> {
-  const names = channelsFrom(env);
-  if (!names.length) throw new UserError('NOTIFY_CHANNELS is empty; set it to ntfy and/or slack (or use --dry-run)');
-  const results = await Promise.allSettled(names.map((n) => CHANNELS[n]!.send(m, env)));
-  const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [`${names[i]}: ${r.reason instanceof Error ? r.reason.message : r.reason}`] : []));
-  if (failed.length) throw new UserError(`notify failed: ${failed.join('; ')}`);
-  return names;
+export async function notify(m: Message, env: NtfyEnv): Promise<void> {
+  if (!env.NTFY_TOPIC) throw new UserError('NTFY_TOPIC is not set (or use --dry-run)');
+  const server = (env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/$/, '');
+  const url = `${server}/${encodeURIComponent(env.NTFY_TOPIC)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    headers: { Title: m.title, ...(env.APP_URL ? { Click: env.APP_URL } : {}), ...(env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {}) },
+    body: m.text,
+  });
+  if (!res.ok) throw new UserError(`notify failed: HTTP ${res.status} from ${new URL(url).host}`);
 }

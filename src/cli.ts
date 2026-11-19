@@ -2,9 +2,11 @@
 import { parseArgs } from 'node:util';
 import { type Config, UserError, configFrom, fail, decideSuggestion, editSession, loadState, logReadiness, logSession, resolveToday, type State } from './app.ts';
 import { isSunday, parseDate, weekOf } from './dates.ts';
-import { formatSuggestions, formatStatus, formatToday, formatWeek, tomorrowText, weeklyText } from './format.ts';
-import { channelsFrom, notify } from './notify.ts';
-import { serve } from './web.ts';
+import { formatSuggestions, formatStatus, formatToday, formatWeek } from './format.ts';
+import { fileStore, type Store } from './io/store.ts';
+import { loadPlan } from './io/plan.ts';
+import { messageFor, notify } from './notify.ts';
+import { createHandler, serve } from './web.ts';
 
 const OPTIONS = {
   today: { type: 'string' }, min: { type: 'string' }, rpe: { type: 'string' }, note: { type: 'string' },
@@ -13,7 +15,7 @@ const OPTIONS = {
 } as const;
 
 type Args = ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>;
-interface Ctx { cfg: Config; state: State; args: Args['values']; pos: string[]; env: NodeJS.ProcessEnv }
+interface Ctx { cfg: Config; store: Store; state: State; args: Args['values']; pos: string[]; env: NodeJS.ProcessEnv }
 type Command = (c: Ctx) => string | Promise<string>;
 
 const HELP = `tri - triathlon training tracker
@@ -30,7 +32,7 @@ const HELP = `tri - triathlon training tracker
   tri notify tomorrow|weekly [--force] [--dry-run]
   tri serve [--port 8787] [--host 127.0.0.1]
 
-Global: --today YYYY-MM-DD (pretend it is that day; backfill). Env: TRI_DATA_DIR, TRI_PLAN, TZ_NAME, NOTIFY_CHANNELS, NTFY_*, SLACK_*.`;
+Global: --today YYYY-MM-DD (pretend it is that day; backfill). Env: TRI_DATA_DIR, TRI_PLAN, TZ_NAME, NTFY_TOPIC, NTFY_SERVER, NTFY_TOKEN, APP_URL.`;
 
 const need = (v: string | undefined, what: string): string => v ?? fail(`missing ${what}. Try "tri --help".`);
 
@@ -44,16 +46,12 @@ function weekFor(state: State, arg: string | undefined) {
 
 async function notifyCommand({ state, args, pos, env }: Ctx): Promise<string> {
   const kind = need(pos[1], 'notify kind (tomorrow|weekly)');
-  const texts: Record<string, { title: string; text: () => string | null }> = {
-    tomorrow: { title: "Tomorrow's training", text: () => tomorrowText(state) },
-    weekly: { title: 'Weekly training summary', text: () => weeklyText(state) },
-  };
-  const spec = texts[kind] ?? fail(`notify takes tomorrow or weekly, got "${kind}"`);
+  const message = messageFor(kind, state);
   if (kind === 'weekly' && !isSunday(state.today) && !args.force) return `Not Sunday (${state.today}); skipping weekly summary. Use --force to send anyway.`;
-  const text = spec.text();
-  if (text === null) return 'Nothing to send.';
-  if (args['dry-run']) return `[dry-run] channels: ${channelsFrom(env).join(', ') || '(none configured)'}\n${spec.title}\n${text}`;
-  return `sent to ${(await notify({ title: spec.title, text }, env)).join(', ')}`;
+  if (message === null) return 'Nothing to send.';
+  if (args['dry-run']) return `[dry-run] ntfy: ${env.NTFY_TOPIC ? 'on' : 'off (NTFY_TOPIC not set)'}\n${message.title}\n${message.text}`;
+  await notify(message, env);
+  return 'sent to ntfy';
 }
 
 const logStatus = (s: string): 'done' | 'skipped' => (s === 'done' || s === 'skipped' ? s : fail('log status must be done or skipped'));
@@ -62,24 +60,24 @@ const COMMANDS: Record<string, Command> = {
   today: ({ state }) => formatToday(state),
   week: ({ state, pos }) => formatWeek(state, weekFor(state, pos[1])),
   status: ({ state }) => formatStatus(state),
-  log: ({ cfg, state, args, pos }) =>
+  log: ({ store, state, args, pos }) =>
     need(pos[1], 'log target') === 'readiness'
-      ? logReadiness(cfg, state, args)
-      : logSession(cfg, state, pos[1]!, logStatus(need(pos[2], 'done|skipped')), args),
-  skip: ({ cfg, state, pos }) => editSession(cfg, state, need(pos[1], 'session key'), 'skip', undefined),
-  edit: ({ cfg, state, pos }) => editSession(cfg, state, need(pos[1], 'session key'), need(pos[2], 'edit op'), pos[3]),
-  suggest: ({ cfg, state, pos }) => {
+      ? logReadiness(store, state, args)
+      : logSession(store, state, pos[1]!, logStatus(need(pos[2], 'done|skipped')), args),
+  skip: ({ store, state, pos }) => editSession(store, state, need(pos[1], 'session key'), 'skip', undefined),
+  edit: ({ store, state, pos }) => editSession(store, state, need(pos[1], 'session key'), need(pos[2], 'edit op'), pos[3]),
+  suggest: ({ store, state, pos }) => {
     const decision = need(pos[1], 'accept|reject');
     if (decision === 'list') return formatSuggestions(state.suggestions);
     if (decision !== 'accept' && decision !== 'reject') fail('suggest takes accept|reject <id>');
-    return decideSuggestion(cfg, state, decision, pos[2]);
+    return decideSuggestion(store, state, decision, pos[2]);
   },
   show: ({ state, pos }) => {
     const id = need(pos[1], 'plan id, e.g. SW-T-1');
     return JSON.stringify(state.plan.library[id] ?? fail(`no library workout "${id}"`), null, 2);
   },
   notify: notifyCommand,
-  serve: ({ cfg, args, env }) => serve(cfg, args.today, Number(args.port ?? env.PORT ?? 8787), args.host ?? '127.0.0.1'),
+  serve: ({ cfg, store, state, args, env }) => serve(createHandler(store, state.plan, cfg.tz, args.today), Number(args.port ?? env.PORT ?? 8787), args.host ?? '127.0.0.1', cfg.dataDir),
 };
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv): Promise<string> {
@@ -88,8 +86,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv): Promise<stri
   if (values.help || !name) return HELP;
   const run = COMMANDS[name] ?? fail(`unknown command "${name}". Try "tri --help".`);
   const cfg = configFrom(env);
-  const state = loadState(cfg, resolveToday(cfg, values.today));
-  return run({ cfg, state, args: values, pos: positionals, env });
+  const store = fileStore(cfg.dataDir);
+  const state = await loadState(store, loadPlan(cfg.planPath), resolveToday(cfg.tz, values.today));
+  return run({ cfg, store, state, args: values, pos: positionals, env });
 }
 
 if (import.meta.main) {
