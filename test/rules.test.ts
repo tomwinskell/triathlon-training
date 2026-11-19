@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { outcomes } from '../src/plan-state.ts';
 import { RULES } from '../src/rules/index.ts';
 import type { Suggestion } from '../src/types.ts';
-import { accepted, ctxFor, logSession, open, readiness, k } from './helpers.ts';
+import { accepted, ctxFor, k, logSession, open, plan, readiness, record } from './helpers.ts';
 
 const one = (list: readonly Suggestion[]) => {
   assert.equal(list.length, 1, `expected exactly one suggestion, got ${JSON.stringify(list.map((s) => s.id))}`);
@@ -118,11 +118,17 @@ test('missed-long-run: after accepting, the next run is 8 km and the suggestion 
 
 // ---- long run and intensity --------------------------------------------------
 
-test('long-run-and-intensity: week 9 adds distance (9 vs 8 km) and a RPE 6 run (vs 4) -> ease the hardest run to RPE 4', () => {
-  // today Tue 2027-01-05 is week 8 (recovery, protected); next week 9 starts 2027-01-11
-  const s = one(RULES['long-run-and-intensity'](ctxFor('2027-01-05')));
-  assert.equal(s.id, 'long-run-and-intensity:2027-01-11');
-  assert.deepEqual(s.edits, [{ op: 'adjust', key: '2027-01-12#1', rpeDelta: -2 }]);
+test('long-run-and-intensity: the plan as written never raises both, measured against the last normal week', () => {
+  // week 9 (9 km, RPE 6) follows recovery week 8; the baseline is week 7 (10 km, RPE 4), so distance did not rise
+  for (const w of plan.weeks) assert.deepEqual(RULES['long-run-and-intensity'](ctxFor(w.start)), [], `week ${w.n}`);
+});
+
+test('long-run-and-intensity: an edit that adds run intensity in a longer-run week is eased back', () => {
+  // week 11: long run 10 km vs week 10's 9 km; Tuesday run edited from RPE 6 to 7 vs week 10's 6
+  const ctx = ctxFor('2027-01-25', [], [record({ op: 'adjust', key: k('2027-01-26#1'), rpeDelta: 1 })]);
+  const s = one(RULES['long-run-and-intensity'](ctx));
+  assert.equal(s.id, 'long-run-and-intensity:2027-01-25');
+  assert.deepEqual(s.edits, [{ op: 'adjust', key: '2027-01-26#1', rpeDelta: -1 }]);
 });
 
 test('long-run-and-intensity: does not fire when only one of the two rises, or for protected weeks', () => {

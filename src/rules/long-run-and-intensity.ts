@@ -6,14 +6,17 @@ const inWeek = (sessions: readonly EffectiveSession[], w: Week) => sessionsInWee
 const longRunKm = (sessions: readonly EffectiveSession[], w: Week) => Math.max(0, ...inWeek(sessions, w).map((s) => s.longRunKm ?? 0));
 const hardestRun = (sessions: readonly EffectiveSession[], w: Week) => Math.max(0, ...inWeek(sessions, w).filter((s) => s.sport === 'run').map((s) => s.rpe.max));
 const weekAt = (plan: Plan, n: number): Week | undefined => plan.weeks.find((w) => w.n === n);
+const isProtected = (w: Week): boolean => w.recovery || w.race;
+/** The last normal week before `w`. A cutback or race week is not a baseline, or every return from one looks like a jump. */
+const baselineBefore = (plan: Plan, w: Week): Week | undefined => plan.weeks.findLast((p) => p.n < w.n && !isProtected(p));
 
-/** Never raise long-run distance and run intensity in the same week: ease the hardest run back to last week's level. */
+/** Never raise long-run distance and run intensity in the same week: ease the hardest run back to the last normal week's level. */
 export const longRunAndIntensity: Rule = (ctx) => {
   const current = ctx.plan.weeks.find((w) => w.start <= ctx.today && ctx.today <= w.end);
   if (!current) return [];
   return [current, weekAt(ctx.plan, current.n + 1)].flatMap((w) => {
-    const prior = w && weekAt(ctx.plan, w.n - 1);
-    if (!w || !prior || w.recovery || w.race) return [];
+    const prior = w && baselineBefore(ctx.plan, w);
+    if (!w || !prior || isProtected(w)) return [];
     const intensity = hardestRun(ctx.sessions, w);
     if (longRunKm(ctx.sessions, w) <= longRunKm(ctx.sessions, prior) || intensity <= hardestRun(ctx.sessions, prior)) return [];
     const target = sessionsInWeek(upcoming(ctx), w).find((s) => s.sport === 'run' && s.rpe.max === intensity);
