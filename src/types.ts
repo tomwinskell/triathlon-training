@@ -62,6 +62,7 @@ export type PlanEdit =
 
 export type OverrideRecord =
   | (PlanEdit & { readonly id: string; readonly at: string; readonly source: 'manual' | { readonly suggestion: string } })
+  | { readonly op: 'accept'; readonly id: string; readonly at: string; readonly suggestion: string }
   | { readonly op: 'reject'; readonly id: string; readonly at: string; readonly suggestion: string };
 
 // ---- log.jsonl (append-only) ------------------------------------------------
@@ -101,3 +102,10 @@ export interface RuleContext {
 }
 
 export type Rule = (ctx: RuleContext) => readonly Suggestion[];
+
+// ---- additions to the sketch
+// OverrideRecord: `accept` joins `reject` as a decision marker, so accepting a flag-only suggestion (no edits) still hides it. ------------------------------------------------
+
+export type Result = { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+export type Outcomes = ReadonlyMap<SessionKey, Outcome>;
