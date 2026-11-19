@@ -16,6 +16,69 @@ node src/cli.ts today
 
 Run it as `node src/cli.ts <command>`, `npm run tri -- <command>`, or `tri <command>` after `npm link`. The examples below use `tri`.
 
+## Recommended setup: a free server and your phone
+
+The web page is the main way to use this: log from your phone after a session. The CLI is there for edits and backfills. Run both on an always-on machine, so the evening job can see what you logged.
+
+This setup costs nothing. Google Cloud's free tier includes one e2-micro VM, which needs a card at signup. Tailscale (free) makes the page reachable only from your own devices, so it needs no login.
+
+1. In the Google Cloud console, create a Compute Engine VM: machine type `e2-micro`, region `us-central1`, `us-east1` or `us-west1`, Debian, standard persistent disk up to 30 GB. Check the [free tier page](https://docs.cloud.google.com/free) for the current limits before you create it.
+2. SSH in and install Node 22 and git:
+
+   ```sh
+   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+   sudo apt-get install -y nodejs git
+   git clone <this repo> ~/tri && cd ~/tri
+   ```
+
+3. Install Tailscale on the VM and on your phone, and sign in to the same account on both:
+
+   ```sh
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+4. Keep the server running with systemd. Create `/etc/systemd/system/tri.service`:
+
+   ```ini
+   [Unit]
+   Description=tri web page
+   After=network-online.target
+
+   [Service]
+   User=<your user>
+   WorkingDirectory=/home/<your user>/tri
+   EnvironmentFile=/home/<your user>/tri/.env
+   ExecStart=/usr/bin/node src/cli.ts serve --port 8787
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   Then start it, and publish it over HTTPS on your tailnet only:
+
+   ```sh
+   sudo systemctl enable --now tri
+   sudo tailscale serve --bg 8787
+   ```
+
+   `tailscale serve status` prints the address, `https://<vm name>.<tailnet>.ts.net`.
+
+5. On your phone, open that address and use Add to Home Screen.
+6. Install the ntfy app on your phone, subscribe to a long random topic name, and put it in `.env` as `NTFY_TOPIC`, with `NOTIFY_CHANNELS=ntfy`. Anyone who knows a topic name on ntfy.sh can read it, so don't use a guessable one.
+7. Add the evening job with `crontab -e`. Set the VM clock to Toronto time first, so 18:00 means 18:00 all year:
+
+   ```sh
+   sudo timedatectl set-timezone America/Toronto
+   ```
+
+   ```cron
+   0 18 * * * cd $HOME/tri && set -a && . ./.env && set +a && node src/cli.ts notify tomorrow && node src/cli.ts notify weekly
+   ```
+
+8. Back up `data/`. It holds everything you log. Copying it to a private git repository once a day from cron is enough.
+
 ## Environment variables
 
 | Variable | Default | Meaning |
@@ -81,14 +144,14 @@ Rules only suggest. Nothing changes until you accept. Thresholds live in `THRESH
 | `amber-readiness` | Today's or yesterday's readiness has 2+ flags: sleep under 6 h, fatigue 4+, pain 3+ | Skip this week's remaining optional runs; RPE -1 on the next session with RPE max 6+ |
 | `pain-stop` | Pain 5+, or trend `sharp` or `worsening` | "Stop running and see a physio." and skip run and brick sessions for 7 days. Overrides amber run edits |
 | `missed-long-run` | The latest past long run was missed or skipped and the next is longer | Repeat the missed distance, minutes scaled |
-| `long-run-and-intensity` | Current or next non-protected week raises both long-run km and top run RPE over the week before | Ease the hardest run to last week's level |
+| `long-run-and-intensity` | Current or next non-protected week raises both long-run km and top run RPE over the last normal week | Ease the hardest run to the level of the last week that was not a cutback or race week |
 | `return-after-gap` | 3+ days ending yesterday where every non-optional session was missed or skipped | 70% of minutes (to 5) for the next 3 days |
 
 `return-after-gap` ignores days before your first log entry, so starting mid-week 1 does not count as a gap.
 
 ## Web page
 
-`tri serve` serves one page on `127.0.0.1:8787` (`--host` to change, for example behind a VPN): today's sessions with Done and Skip buttons, a readiness form, open suggestions, and this week. It has no authentication, so keep it on localhost or put a reverse proxy with auth in front.
+`tri serve` serves one page on `127.0.0.1:8787` (`--host` to change, for example behind a VPN): today's sessions with Done and Skip buttons, a readiness form, open suggestions, and this week. It has no authentication, so keep it on localhost and reach it through `tailscale serve` (see the recommended setup) or a reverse proxy with auth.
 
 ## Scheduling
 
@@ -104,6 +167,9 @@ Notifications need `NOTIFY_CHANNELS` and the matching variables. `weekly` exits 
 Put the variables in `.env` as `KEY=value` lines and keep it out of git.
 
 ### GitHub Actions
+
+Use this only when nothing is always on. On a server, cron is simpler because the data is already there.
+
 
 `.github/workflows/notify.yml` runs daily at 22:30 UTC and on manual dispatch (with a dry-run switch). Add the variables as repository secrets: `NOTIFY_CHANNELS`, `NTFY_TOPIC`, `NTFY_SERVER`, `NTFY_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_USER_ID`.
 
