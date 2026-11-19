@@ -1,0 +1,31 @@
+name: notify
+
+on:
+  schedule:
+    - cron: '30 22 * * *' # 17:30 EST / 18:30 EDT in Toronto
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the messages instead of sending them
+        type: boolean
+        default: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      TRI_DATA_DIR: ./data # must exist in the checkout: commit it (see README, "GitHub Actions")
+      NOTIFY_CHANNELS: ${{ secrets.NOTIFY_CHANNELS }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_USER_ID: ${{ secrets.SLACK_USER_ID }}
+      DRY: ${{ inputs.dry_run && '--dry-run' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node src/cli.ts notify tomorrow $DRY
+      - run: node src/cli.ts notify weekly $DRY # exits 0 without sending unless it is Sunday in TZ_NAME

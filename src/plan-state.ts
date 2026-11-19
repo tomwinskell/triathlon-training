@@ -1,6 +1,6 @@
 // Pure plan state: baseline + overrides -> effective sessions, outcomes against the log, and edit validation.
 import { weekOf } from './dates.ts';
-import type { EffectiveSession, ISODate, LogEntry, Outcomes, OverrideRecord, Plan, PlanEdit, Result, SessionKey } from './types.ts';
+import type { EffectiveSession, ISODate, LogEntry, Outcomes, OverrideRecord, Plan, PlanEdit, Result, SessionKey, Week } from './types.ts';
 
 type Draft = { -readonly [K in keyof EffectiveSession]: EffectiveSession[K] };
 type Drafts = Map<SessionKey, Draft>;
@@ -41,6 +41,10 @@ export function applyOverrides(plan: Plan, overrides: readonly OverrideRecord[])
   }
   return [...all.values()].sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
 }
+
+/** Effective sessions dated inside a week (after moves), plan-skipped ones included. */
+export const sessionsInWeek = (sessions: readonly EffectiveSession[], w: Week): EffectiveSession[] =>
+  sessions.filter((s) => s.date >= w.start && s.date <= w.end);
 
 /** The latest log entry per session key (later lines correct earlier ones). */
 export const lastSessionLogs = (log: readonly LogEntry[]) =>

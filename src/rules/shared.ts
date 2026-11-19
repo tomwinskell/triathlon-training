@@ -1,7 +1,8 @@
 // Thresholds and helpers shared by the rules.
 import { addDays } from '../dates.ts';
 import { outcomes } from '../plan-state.ts';
-import type { EffectiveSession, LogEntry, PlanEdit, RuleContext, Sport } from '../types.ts';
+import type { Readiness } from '../stats.ts';
+import type { EffectiveSession, PlanEdit, RuleContext, Sport } from '../types.ts';
 
 export const THRESHOLDS = {
   sleepHoursBelow: 6,
@@ -19,7 +20,7 @@ export const THRESHOLDS = {
 
 export const RUNNING: ReadonlySet<Sport> = new Set(['run', 'brick']);
 
-export type Readiness = Extract<LogEntry, { type: 'readiness' }>;
+
 
 /** The latest readiness entry dated today or yesterday (file order breaks ties). */
 export function recentReadiness(ctx: RuleContext): Readiness | undefined {
