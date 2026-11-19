@@ -1,6 +1,4 @@
-// Boundary: the Store interface (one read, one batched append), the record field tables, and the JSONL-file backend.
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// Boundary: the Store interface (one read, one batched append) and the record field tables. No Node imports, so the Worker can bundle it.
 import { parseDate } from '../dates.ts';
 import type { LogEntry, OverrideRecord } from '../types.ts';
 
@@ -30,7 +28,7 @@ const LOG_SHAPES: Record<string, Record<string, Check>> = {
   readiness: { at: str, date, sleepHours: num(0, 24), fatigue: int(1, 5), pain: num(0, 10), painLocation: opt(str), painTrend: opt(oneOf('stable', 'improving', 'worsening', 'sharp')) },
 };
 
-interface RecOf { log: LogEntry; override: OverrideRecord }
+export interface RecOf { log: LogEntry; override: OverrideRecord }
 export type Rec = { [K in keyof RecOf]: { readonly kind: K; readonly rec: RecOf[K] } }[keyof RecOf];
 export interface StoreData { readonly log: LogEntry[]; readonly overrides: OverrideRecord[] }
 
@@ -57,23 +55,3 @@ export function validate<K extends keyof RecOf>(kind: K, raw: unknown, where: st
 export const parseJson = (text: string, where: string): unknown => {
   try { return JSON.parse(text); } catch { throw new Error(`${where}: not valid JSON`); }
 };
-
-function readJsonl<K extends keyof RecOf>(file: string, kind: K): RecOf[K][] {
-  if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf8').split('\n').flatMap((line, i) => {
-    if (!line.trim()) return [];
-    const where = `${file}:${i + 1}`;
-    return [validate(kind, parseJson(line, where), where)];
-  });
-}
-
-const FILES = { log: 'log.jsonl', override: 'overrides.jsonl' } as const;
-
-/** One JSON object per line in `<dir>/log.jsonl` and `<dir>/overrides.jsonl`. */
-export const fileStore = (dir: string): Store => ({
-  read: async () => ({ log: readJsonl(join(dir, FILES.log), 'log'), overrides: readJsonl(join(dir, FILES.override), 'override') }),
-  append: async (recs) => {
-    mkdirSync(dir, { recursive: true });
-    for (const { kind, rec } of recs) appendFileSync(join(dir, FILES[kind]), JSON.stringify(rec) + '\n');
-  },
-});

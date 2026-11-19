@@ -1,0 +1,10 @@
+{
+  "name": "triathlon-training",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "triathlon", "database_id": "PASTE-YOUR-DATABASE-ID-HERE", "migrations_dir": "migrations" }
+  ],
+  "triggers": { "crons": ["30 22 * * *"] }, // 17:30 EST / 18:30 EDT in Toronto
+  "vars": { "TZ_NAME": "America/Toronto" }
+}

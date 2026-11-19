@@ -1,6 +1,5 @@
 // One server-rendered page over the same state and actions as the CLI. Forms POST, the server redirects back.
-// The core is a standard fetch handler: `tri serve` wraps it in node:http, the Worker calls it directly.
-import { createServer } from 'node:http';
+// The core is a standard fetch handler with no Node imports: serve.ts wraps it in node:http, the Worker calls it directly.
 import { UserError, decideSuggestion, editSession, loadState, logReadiness, logSession, resolveToday, type State } from './app.ts';
 import { dayName, weekOf } from './dates.ts';
 import type { Store } from './io/store.ts';
@@ -8,7 +7,7 @@ import { sessionsInWeek } from './plan-state.ts';
 import type { EffectiveSession, Plan, Week } from './types.ts';
 
 const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const MAX_BODY = 16_384;
+export const MAX_BODY = 16_384;
 
 const STATUS_LABEL = { done: 'done', skipped: 'skipped', missed: 'missed', pending: '' } as const;
 
@@ -152,22 +151,4 @@ export function createHandler(store: Store, plan: Plan, tz: string, todayOverrid
       return new Response('server error', { status: 500 });
     }
   };
-}
-
-/** Wraps a fetch handler in node:http. Starts listening; resolves with a message once the server closes. */
-export function serve(handle: (req: Request) => Promise<Response>, port: number, host: string, where: string): Promise<string> {
-  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UserError(`bad --port ${port}`);
-  const server = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    if (req.method !== 'GET' && req.method !== 'HEAD') for await (const c of req as AsyncIterable<Buffer>) if ((size += c.length) <= MAX_BODY + 1) chunks.push(c);
-    const headers = Object.entries(req.headers).flatMap(([k, v]) => (v === undefined ? [] : [[k, [v].flat().join(', ')] as [string, string]]));
-    const resp = await handle(new Request(`http://${req.headers.host}${req.url}`, { method: req.method, headers, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }));
-    res.writeHead(resp.status, Object.fromEntries(resp.headers)).end(Buffer.from(await resp.arrayBuffer()));
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.once('close', () => resolve('server stopped'));
-    server.listen(port, host, () => console.log(`tri serving on http://${host}:${port}/ (data: ${where})`));
-  });
 }

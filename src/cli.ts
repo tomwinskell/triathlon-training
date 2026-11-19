@@ -3,10 +3,12 @@ import { parseArgs } from 'node:util';
 import { type Config, UserError, configFrom, fail, decideSuggestion, editSession, loadState, logReadiness, logSession, resolveToday, type State } from './app.ts';
 import { isSunday, parseDate, weekOf } from './dates.ts';
 import { formatSuggestions, formatStatus, formatToday, formatWeek } from './format.ts';
-import { fileStore, type Store } from './io/store.ts';
+import { fileStore } from './io/file-store.ts';
+import type { Store } from './io/store.ts';
 import { loadPlan } from './io/plan.ts';
 import { messageFor, notify } from './notify.ts';
-import { createHandler, serve } from './web.ts';
+import { serve } from './serve.ts';
+import { createHandler } from './web.ts';
 
 const OPTIONS = {
   today: { type: 'string' }, min: { type: 'string' }, rpe: { type: 'string' }, note: { type: 'string' },

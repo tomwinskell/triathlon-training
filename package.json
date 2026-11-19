@@ -3,16 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Self-hosted triathlon training tracker",
-  "engines": { "node": ">=22.18" },
-  "bin": { "tri": "src/cli.ts" },
+  "description": "Triathlon training tracker on Cloudflare Workers and D1",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "tri": "src/cli.ts"
+  },
   "scripts": {
     "tri": "node src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/*.test.ts\""
+    "test": "node --test \"test/*.test.ts\"",
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply triathlon --remote",
+    "db:migrate:local": "wrangler d1 migrations apply triathlon --local"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "wrangler": "4.157.0"
   }
 }
