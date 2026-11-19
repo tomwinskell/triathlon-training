@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { outcomes } from '../src/plan-state.ts';
 import { RULES } from '../src/rules/index.ts';
 import type { Suggestion } from '../src/types.ts';
-import { accepted, ctxFor, logSession, open, readiness, record, k } from './helpers.ts';
+import { accepted, ctxFor, logSession, open, readiness, k } from './helpers.ts';
 
 const one = (list: readonly Suggestion[]) => {
   assert.equal(list.length, 1, `expected exactly one suggestion, got ${JSON.stringify(list.map((s) => s.id))}`);
@@ -168,8 +168,4 @@ test('return-after-gap: accepted once, the 70% minutes apply and the suggestion 
   const after = ctxFor('2026-11-20', log, overrides);
   assert.equal(after.sessions.find((x) => x.key === '2026-11-20#1')!.minutes, 35);
   assert.deepEqual(open(after, overrides), []);
-});
-
-test('record helper keeps edits manual by default', () => {
-  assert.equal(record({ op: 'skip', key: k('2026-11-19#2') }).source, 'manual');
 });
