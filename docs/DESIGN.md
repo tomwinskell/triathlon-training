@@ -1,35 +1,39 @@
 # Design sketch
 
-Goal: a self-hosted training tracker that reads the fixed plan, records what happened, applies deterministic adaptation rules as suggestions, and sends evening and weekly notifications. No LLM, no cloud lock-in.
+Goal: a free, phone-first training tracker that reads the fixed plan, records what happened, applies deterministic adaptation rules as suggestions, and sends evening and weekly notifications. It runs on Cloudflare's free tier (one Worker, one D1 database, one Cron Trigger) or locally on files. No LLM.
 
 ## Shape chosen
 
-Plan state is `fold(baseline, overrides)`. Everything that changes is an append-only JSONL file. Nothing mutates the baseline.
+Plan state is `fold(baseline, overrides)`. Everything that changes is an append-only record in one Store (JSONL files locally, a D1 table on Cloudflare). Nothing mutates the baseline.
 
-| State | Owner | File |
+| State | Owner | Where |
 |---|---|---|
 | Baseline plan | `plan/triathlon_plan_2026-27.json` (read-only) | `src/io/plan.ts` parses it |
-| Plan edits and suggestion decisions | `overrides.jsonl` | `src/io/store.ts` appends |
-| Session results and readiness | `log.jsonl` | `src/io/store.ts` appends |
+| Plan edits and suggestion decisions | `overrides.jsonl`, or `entries` rows of kind `override` | `Store.append` |
+| Session results and readiness | `log.jsonl`, or `entries` rows of kind `log` | `Store.append` |
 
-Rejected alternative: SQLite with mutable rows. It adds a native dependency and makes "what did the plan say before I edited it" a migration problem. JSONL keeps the history readable with `cat` and diffable in git, which matters if the GitHub Actions job reads a committed data dir.
+Rejected alternative: mutable rows (an `UPDATE` per edit). They make "what did the plan say before I edited it" a migration problem. The `entries` table is append-only, so the history stays readable and `wrangler d1 export` is a full backup.
 
 ## Modules
 
 ```
 src/types.ts          domain types (this sketch)
 src/dates.ts          pure date math on ISODate: todayIn(tz, now), addDays, dayOfWeek, weekOf(plan, date), daysBetween
-src/io/plan.ts        loadPlan(path): Plan               boundary: validates raw JSON, derives sport/rpe/longRunKm
-src/io/store.ts       readOverrides/appendOverride, readLog/appendLog   boundary: one JSON object per line, validated on read
+src/io/plan.ts        parsePlan(raw): Plan (pure); loadPlan(path)   boundary: validates raw JSON, derives sport/rpe/longRunKm
+src/io/store.ts       Store { read(); append(recs[]) } and the field tables that validate every record read
+src/io/file-store.ts  fileStore(dir): JSONL files (CLI, tests, `tri serve`)
+src/io/d1.ts          d1Store(db): one `entries(seq, kind, json)` table; append is one D1 batch
 src/plan-state.ts     applyOverrides(plan, overrides): EffectiveSession[]   pure
                       outcomes(sessions, log, today): Map<SessionKey, Outcome>   pure
                       validateEdit(edit, ctx): Result   pure (refuses make-ups and progression in protected weeks)
 src/rules/index.ts    RULES: Record<RuleName, Rule>; suggest(ctx): Suggestion[] (minus rejected/accepted ids)
 src/rules/*.ts        one file per rule, pure
 src/format.ts         text for CLI and notifications (today, week, tomorrow, weekly summary)
-src/notify.ts         CHANNELS: Record<'ntfy'|'slack', Sender>; send(text, env)   boundary: env vars
+src/notify.ts         messageFor(kind, state); notify(message, env)   boundary: ntfy over fetch, env vars
 src/cli.ts            thin shell: parse argv → call pure functions → append → print
-src/web.ts            optional node:http page over the same functions
+src/web.ts            createHandler(store, plan, tz): (Request) => Promise<Response>; no Node imports
+src/serve.ts          node:http wrapper for `tri serve`
+src/worker.ts         Cloudflare entry: fetch = the handler over d1Store, scheduled = notify tomorrow (+ weekly on Sunday)
 ```
 
 Node 22 runs `.ts` directly (type stripping), so there is no build step. Use only erasable TypeScript: no `enum`, no parameter properties, `.ts` extensions on relative imports. Dev dependencies are `typescript` and `@types/node` only, for `tsc --noEmit`. Tests use `node:test`.
@@ -50,4 +54,4 @@ Suggestion ids are `<rule>:<anchor>`. Accepting appends the edits to `overrides.
 
 ## Notifications
 
-`tri notify tomorrow` and `tri notify weekly` format text and send it to every channel in `NOTIFY_CHANNELS` (comma-separated). ntfy needs `NTFY_TOPIC` (and optional `NTFY_SERVER`, `NTFY_TOKEN`). Slack DM needs `SLACK_BOT_TOKEN` and `SLACK_USER_ID` and posts with `chat.postMessage`. "Tomorrow" and "today" are computed in `TZ_NAME`, default `America/Toronto`, never in the host's zone. `weekly` on a non-Sunday exits 0 without sending unless `--force`, so a single daily cron entry can run both.
+`tri notify tomorrow` and `tri notify weekly` format text and send it to ntfy when `NTFY_TOPIC` is set (optional `NTFY_SERVER`, `NTFY_TOKEN`, and `APP_URL`, sent as the `Click` header so tapping the notification opens the page). "Tomorrow" and "today" are computed in `TZ_NAME`, default `America/Toronto`, never in the host's zone. `weekly` on a non-Sunday exits 0 without sending unless `--force`. On Cloudflare, one Cron Trigger (`30 22 * * *`, 17:30 or 18:30 in Toronto) sends `tomorrow`, and `weekly` too when it is Sunday in `TZ_NAME`.
