@@ -54,6 +54,8 @@ You need Node 22.18 or newer on your computer ([nodejs.org](https://nodejs.org))
    npm run deploy
    ```
 
+   The first deploy asks you to register a workers.dev subdomain. This is one name for your whole Cloudflare account, not for this app, so type your own name (for example `tomwinskell`), not `triathlon-training`. Your address becomes `https://triathlon-training.<that name>.workers.dev`.
+
    It prints your address, like `https://triathlon-training.<your-name>.workers.dev`. Open `wrangler.jsonc`, add `"APP_URL": "https://triathlon-training.<your-name>.workers.dev"` next to `TZ_NAME` inside `vars`, and run `npm run deploy` again. Now tapping an evening notification opens the page.
 
 9. **Lock it down.** Right now anyone who learns the address could log sessions or change your plan, because the page has no password. Cloudflare Access puts a login in front of it for free. In the Cloudflare dashboard go to Workers & Pages, open `triathlon-training`, then Settings, then Domains & Routes. Next to the `workers.dev` row, turn on Cloudflare Access. Set the policy to allow only your own email address. You will then log in with a one-time code sent to that email. (Names in the dashboard may differ slightly; look for "Access" on the workers.dev route.)
@@ -172,4 +174,5 @@ Keep `backup.sql` somewhere private. It holds everything you logged.
 
 - **Error 1102 (Worker exceeded resource limits).** The page used more than 10 ms of computing time. Reload once. If it keeps happening, open an issue with how many entries you have logged.
 - **No evening message.** Check that you set the secret (step 7) and that your phone is subscribed to the same topic. In the dashboard, open the Worker's Logs to see errors from the scheduled run.
+- **The address has the wrong middle part** (for example `triathlon-training.triathlon-training.workers.dev`). That part is your account's subdomain. In the dashboard, open Workers & Pages, find "Your subdomain" and click Change. Then update `APP_URL` in `wrangler.jsonc`, run `npm run deploy`, and check the Access login (step 9) still covers the new address. The old address stops working, and the new one can take a few minutes to start.
 - **`database_id` errors on deploy.** Step 4 was skipped, or the id was pasted with extra characters.
